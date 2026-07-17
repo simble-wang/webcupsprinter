@@ -28,7 +28,9 @@ PDF、PNG、JPG、JPEG、GIF、BMP、TIFF、TXT、PS、EPS、WebP
 
 ## 截图
 
-> TODO: 上传后补充截图
+![主界面](screenshots/main.png)
+
+> 主界面：深色主题、拖拽上传、打印设置一目了然。
 
 ## 快速开始
 

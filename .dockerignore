@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# WorkBuddy
+.workbuddy/
+
+# 运行时生成的文件
+certs/
+uploads/
+
+# IDE
+.idea/
+.vscode/
+.DS_Store

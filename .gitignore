@@ -1,0 +1,28 @@
+# SSL 证书（自动生成，每人不同，不应提交）
+certs/
+
+# 上传的临时文件
+uploads/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# WorkBuddy 工作区数据
+.workbuddy/
+Cupsautoprinter.tar.gz

@@ -1,4 +1,21 @@
 services:
+  # ── CUPS 打印服务（宿主机直连打印机） ──
+  cups2:
+    image: ydkn/cups:latest
+    container_name: cups2
+    restart: unless-stopped
+    network_mode: "host"          # host 模式，localhost:631 直通
+    privileged: true               # 需要访问 USB 设备
+    volumes:
+      - /dev/bus/usb:/dev/bus/usb                      # USB 打印机直通
+      - /etc/cups:/etc/cups                            # CUPS 配置持久化
+      - /var/run/avahi-daemon/socket:/var/run/avahi-daemon/socket
+      - /var/run/dbus:/var/run/dbus
+    environment:
+      - TZ=Asia/Shanghai
+      - ADMIN_PASSWORD=admin        # ← CUPS Web 管理页（:631）登录密码，建议改掉
+
+  # ── Flask 打印 Web 服务 ──
   print-web:
     build: .
     container_name: print-web
@@ -6,6 +23,7 @@ services:
     network_mode: "host"          # 跟 CUPS 一样用 host 网络，localhost:631 直通
     volumes:
       - ./uploads:/tmp/print_uploads        # 上传文件临时存储
+      - ./templates:/app/templates:ro       # ← 前端模板（热更新：改完文件立即生效）
       - /your/nas/path:/nas_files:ro        # ← 改成你的 NAS 文件目录（只读）
       - ./certs:/tmp/certs:ro               # SSL 证书（只读，给 Flask 提供下载）
     environment:
@@ -15,6 +33,7 @@ services:
       - LOCAL_FILES_DIR=/nas_files # 容器内挂载的 NAS 文件目录
       - SSL_CERT_PATH=/tmp/certs/cert.pem  # 证书路径，供 iPhone 下载安装
 
+  # ── Nginx 反向代理 + HTTPS ──
   nginx:
     build: ./nginx
     container_name: print-proxy

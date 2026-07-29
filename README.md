@@ -4,12 +4,13 @@
 
 ## 这是什么
 
-一个跑在 NAS Docker 上的轻量 Web 应用，对接同 NAS 上的 CUPS 打印服务。浏览器打开页面，选文件，点打印，完事。
+一个跑在 NAS Docker 上的轻量 Web 应用，对接同 NAS 上的 CUPS 打印服务。浏览器打开页面，选文件，点打印，完事。三个容器各管一摊：CUPS 干打印活的底层，Flask 管网页交互，Nginx 套一层 HTTPS 给 iPhone 用。
 
 **适合谁用：**
 - NAS 上已经跑着 CUPS 打印服务的人
 - 想用手机直接打印 NAS 里文件的人
 - 受够了"传文件到电脑 → 连数据线 → 打印"这条老路的人
+- **喷墨打印机长期不开会堵头**的人（本项目自带防堵自动打印）
 
 ## 功能
 
@@ -22,6 +23,9 @@
 - **打印状态查询**：实时查看打印机状态和打印队列
 - **取消打印任务**：一键取消队列中的任务
 - **iPhone HTTPS 支持**：自签证书 + Nginx 反代，解决 iOS Safari 强制 HTTPS 升级问题
+- **🖨️ 浏览器标签图标**：纯 SVG emoji favicon，零外部依赖，标签栏一眼认出
+- **喷头防堵倒计时**：网页顶部显示「距上次打印已过 X 天」，绿/黄/红三色状态
+- **喷头防堵自动打印**：超过 7 天没打印，自动随机打一张防堵头 PDF 并 Bark 推送到手机
 
 **支持的文件格式：**
 PDF、PNG、JPG、JPEG、GIF、BMP、TIFF、TXT、PS、EPS、WebP
@@ -30,22 +34,22 @@ PDF、PNG、JPG、JPEG、GIF、BMP、TIFF、TXT、PS、EPS、WebP
 
 ![主界面](screenshots/main.png)
 
-> 主界面：深色主题、拖拽上传、打印设置一目了然。
+> 主界面：深色主题、拖拽上传、打印设置一目了然。顶部还有喷头防堵倒计时卡片。
 
 ## 快速开始
 
 ### 前置条件
 
-1. **NAS 上已部署 CUPS**，且打印机已添加（能通过 `lp` 命令打印）
-2. **Docker + Docker Compose** 已安装
-3. CUPS 容器和本服务需要能通过 `localhost:631` 通信（都用 `network_mode: host` 最简单）
+1. **Docker + Docker Compose** 已安装
+2. 一台通过 USB 连在 NAS 上的打印机（CUPS 会接管它）
+3. 本项目的 `cups2` 容器自带 CUPS 服务，无需你提前装
 
 ### 部署步骤
 
 ```bash
 # 1. 克隆项目
 git clone https://github.com/simble-wang/webcupsprinter.git
-cd Cupsautoprinter
+cd webcupsprinter
 
 # 2. 改配置（必改三项）
 vi docker-compose.yml
@@ -55,9 +59,9 @@ vi docker-compose.yml
 
 | 配置项 | 位置 | 说明 |
 |--------|------|------|
-| `/your/nas/path` | docker-compose.yml volumes | 改成你 NAS 上要浏览的文件目录 |
-| `YourPrinterName` | docker-compose.yml environment | 改成 CUPS 里的打印机名（`lpstat -p` 查看） |
-| `SAN_IPS` | docker-compose.yml environment | 改成你 NAS 的 IP 地址（所有你打算用来访问的 IP） |
+| `/your/nas/path` | docker-compose.yml volumes（print-web） | 改成你 NAS 上要浏览的文件目录 |
+| `YourPrinterName` | docker-compose.yml environment（print-web） | 改成 CUPS 里的打印机名（`docker exec cups2 lpstat -p` 查看） |
+| `SAN_IPS` | docker-compose.yml environment（nginx） | 改成你 NAS 的 IP 地址（所有你打算用来访问的 IP） |
 
 **SAN_IPS 示例：**
 ```yaml
@@ -69,7 +73,7 @@ vi docker-compose.yml
 ```
 
 ```bash
-# 3. 启动
+# 3. 启动（会自动构建 print-web 和 nginx 镜像，并拉取 cups2 镜像）
 docker compose up -d --build
 
 # 4. 验证
@@ -93,7 +97,7 @@ iOS Safari 对 IP 地址会自动尝试 HTTPS 升级。如果只提供 HTTP 服�
 
 ## iPhone HTTPS 证书信任设置（重要！）
 
-Nginx 使用自签名证书，iPhone 需要手动信任。**证书必须包含 `CA:TRUE` 扩展**，否则 iOS 系统级信任不生效（本项目已处理好此问题）。
+Nginx 使用自签名证书，iPhone 需要手动信任。证书由 `nginx/entrypoint.sh` 首次启动时自动生成（含你配置的 SAN IP），生成一次后会持久化在 `./certs` 目录，重启不会变。
 
 ### 步骤
 
@@ -126,16 +130,62 @@ Nginx 使用自签名证书，iPhone 需要手动信任。**证书必须包含 `
                     └──────┬───────┘
                            │ lp / lpstat 命令
                     ┌──────▼───────┐
-                    │    CUPS      │ :631
+                    │    CUPS      │ :631 (ydkn/cups 容器)
                     │  (打印服务)   │
+                    └──────┬───────┘
+                           │ USB
+                    ┌──────▼───────┐
+                    │   打印机      │
                     └──────────────┘
 ```
 
-**两个容器：**
-- `print-web`：Flask 应用，处理打印逻辑、文件浏览、缩略图渲染
+**三个容器：**
+- `cups2`：CUPS 打印服务（ydkn/cups 镜像），接管 USB 打印机，提供 `lp` / `lpstat` 命令行接口
+- `print-web`：Flask 应用，处理打印逻辑、文件浏览、缩略图渲染、防堵头倒计时
 - `print-proxy`：Nginx 反向代理，提供 HTTPS（主要给 iPhone 用）
 
-两个容器都用 `network_mode: host`，所以 Nginx 能直连 `localhost:5000`，Flask 能直连 `localhost:631`。
+三个容器都用 `network_mode: host`，所以 Nginx 能直连 `localhost:5000`，Flask 能直连 `localhost:631`。
+
+## 喷头防堵自动打印
+
+喷墨打印机长期不用，墨水会干在喷头里堵死。解决办法很简单：**定期随便打一张**。本功能帮你自动盯着。
+
+### 工作原理
+
+1. 网页顶部实时显示「距上次打印已过 X 天」的倒计时（服务端渲染，刷新页面立即可见）
+2. 每天 10:00 的 cron 任务跑 `anti-clog.sh`，查 CUPS 最近一次完成打印的时间
+3. 如果距今 **超过 7 天**，随机选一张防堵头 PDF 自动打印
+4. 打印成功后通过 **Bark** 推送到手机：「防堵头工具已运行并打印」
+5. 打印失败则推送：「打印失败: xxx 原因」，方便你排查（打印机没纸/没墨/离线）
+
+### 配置步骤
+
+**1. 准备两张防堵头 PDF**（内容随便，纯色块/测试页都行），放到 NAS 某目录，例如：
+```
+/your/nas/path/AForprinter/打印防堵头儿文案.pdf
+/your/nas/path/AForprinter/打印防堵头儿文案2.pdf
+```
+
+**2. 改 `anti-clog.sh` 里的路径和 Bark key：**
+```bash
+FILE1="/your/nas/path/AForprinter/打印防堵头儿文案.pdf"
+FILE2="/your/nas/path/AForprinter/打印防堵头儿文案2.pdf"
+BARK_KEY="你的BarkKey"        # 或者用环境变量 BARK_KEY 传入，避免写在脚本里
+```
+
+**3. 加到 root 的 crontab：**
+```bash
+sudo crontab -e
+# 每天 10:00 检查一次
+0 10 * * * /path/to/anti-clog.sh
+```
+
+> 阈值（`THRESHOLD_DAYS`）、打印机名（`PRINTER`）、CUPS 容器名（`CUPS_CONTAINER`）都在 `anti-clog.sh` 顶部配置区，按需改。
+
+### 注意事项
+
+- 脚本通过 `docker exec cups2 lpstat -W completed -o` 查打印记录，CUPS 输出按任务号降序，取第一行即最近一次打印，逻辑无误
+- 如果打印机关机/没纸，`lp` 命令仍会"成功排队"但打不出来，Bark 会误报"已打印"，且次日 cron 会再次触发——这是 CUPS 异步打印的固有限制，使用前确认打印机在线有墨
 
 ## 配置说明
 
@@ -170,7 +220,7 @@ docker compose up -d --force-recreate nginx
 ## 常见问题
 
 **Q: 打印机连不上？**
-确认 CUPS 容器在跑：`docker ps | grep cups`，确认 `lpstat -h localhost:631 -p` 能看到打印机。
+确认 cups2 容器在跑：`docker ps | grep cups2`，确认 `docker exec cups2 lpstat -p` 能看到打印机。
 
 **Q: iPhone 提示"无法连接到服务器"？**
 1. 确认 Tailscale/网络通了
@@ -189,13 +239,17 @@ docker compose up -d --force-recreate nginx
 **Q: 想改端口？**
 改 `nginx/nginx.conf` 里的 `listen 8443` 和 `docker-compose.yml` 里对应的配置。
 
+**Q: 防堵头倒计时一直显示"正在查询打印记录"？**
+页面用了服务端渲染兜底，正常应直接显示剩余天数。若卡在查询态，多半是浏览器缓存了旧页面，强刷（Ctrl/Cmd+Shift+R）即可；或检查 Flask 能否连上 `localhost:631` 的 CUPS。
+
 ## 技术栈
 
 - **后端**：Flask 3.1.1 + PyMuPDF（PDF 渲染）
 - **前端**：pdf.js 3.11.174（CDN）+ 原生 JS
-- **打印**：CUPS（lp / lpstat / cancel 命令行工具）
+- **打印**：CUPS（ydkn/cups 镜像，lp / lpstat / cancel 命令行工具）
 - **HTTPS**：Nginx（nginx:alpine）+ OpenSSL 自签证书
 - **Docker**：python:3.11-slim + nginx:alpine
+- **推送**：Bark（防堵头打印通知）
 
 ## 限制
 

@@ -6,7 +6,7 @@ CERT_FILE="$CERT_DIR/cert.pem"
 KEY_FILE="$CERT_DIR/key.pem"
 
 # 证书中的 SAN IP 列表（可通过环境变量 SAN_IPS 覆盖）
-# 在 docker-compose.yml 的 SAN_IPS 环境变量里填你 NAS 的实际 IP
+# 改成你 NAS 的实际可达 IP（浏览器地址栏输入的 IP 必须在这个列表里）
 SAN_IPS="${SAN_IPS:-IP:127.0.0.1,IP:192.168.1.100}"
 
 # 如果证书已存在，跳过生成（避免每次重启都换新证书导致浏览器重新弹警告）
@@ -21,9 +21,6 @@ else
         -out "$CERT_FILE" \
         -days 3650 \
         -subj "/O=CupsAutoPrinter/CN=nas-print-server" \
-        -addext "basicConstraints=critical,CA:TRUE" \
-        -addext "keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign,cRLSign" \
-        -addext "extendedKeyUsage=serverAuth" \
         -addext "subjectAltName=$SAN_IPS"
 
     if [ -f "$CERT_FILE" ] && [ -f "$KEY_FILE" ]; then

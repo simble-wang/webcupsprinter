@@ -1,3 +1,4 @@
+from datetime import datetime
 """
 NAS 远程打印 Web 服务
 通过网页上传文件，调用 CUPS 的 lp 命令完成打印。
@@ -9,7 +10,7 @@ import time
 import subprocess
 import threading
 import fitz  # PyMuPDF
-from flask import Flask, render_template, request, jsonify, Response
+from flask import Flask, render_template, request, jsonify, Response, make_response
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
@@ -17,7 +18,7 @@ app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB，够打印用了
 
 # ── 配置（全部走环境变量，docker-compose 里改） ──
 UPLOAD_DIR = os.environ.get('UPLOAD_DIR', '/tmp/print_uploads')
-PRINTER_NAME = os.environ.get('PRINTER_NAME', 'YourPrinterName')
+PRINTER_NAME = os.environ.get('PRINTER_NAME', 'HPDJ2130')
 CUPS_SERVER = os.environ.get('CUPS_SERVER', 'localhost:631')
 CLEANUP_INTERVAL = 600   # 每 10 分钟扫一次
 FILE_MAX_AGE = 3600      # 文件活 1 小时就删，别占地方
@@ -63,7 +64,37 @@ _cleanup.start()
 
 @app.route('/')
 def index():
-    return render_template('index.html', printer_name=PRINTER_NAME)
+    import time
+    lp = get_last_print()
+    clog_ts = lp.get('timestamp') if lp.get('success') else None
+    clog_time = lp.get('last_print') if lp.get('success') else None
+    CLOG_THRESHOLD = 7 * 24 * 3600
+    clog_state, clog_text, clog_detail, clog_pct = 'safe', '暂无打印记录', '快去打印一张吧 🖨️', 0
+    now_ts = int(time.time())
+    if clog_ts:
+        elapsed = now_ts - clog_ts
+        remaining = CLOG_THRESHOLD - elapsed
+        pct = min(100, int((elapsed / CLOG_THRESHOLD) * 100))
+        if elapsed >= CLOG_THRESHOLD:
+            clog_state, clog_text, clog_detail, clog_pct = 'danger', '⚠️ 已超期，自动打印中', '上次打印：' + clog_time, pct
+        elif remaining <= 86400:
+            clog_state, clog_text, clog_detail, clog_pct = 'warning', '⏰ 还剩 ' + str(int(remaining / 3600)) + ' 小时', '上次打印：' + clog_time, pct
+        else:
+            clog_state, clog_text, clog_detail, clog_pct = 'safe', '✅ 剩余 ' + str(int(remaining / 86400)) + ' 天', '上次打印：' + clog_time, pct
+    resp = make_response(render_template(
+        'index.html',
+        printer_name=PRINTER_NAME,
+        clog_ts=clog_ts,
+        clog_time=clog_time,
+        clog_state=clog_state,
+        clog_text=clog_text,
+        clog_detail=clog_detail,
+        clog_pct=clog_pct,
+    ))
+    resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    return resp
 
 
 @app.route('/api/print', methods=['POST'])
@@ -439,5 +470,43 @@ def thumbnail():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+
+def get_last_print():
+    try:
+        result = subprocess.run(
+            ['lpstat', '-h', CUPS_SERVER, '-W', 'completed', '-o'],
+            capture_output=True, text=True, timeout=10
+        )
+        lines = [l for l in result.stdout.strip().split('\n') if l.strip()] if result.stdout.strip() else []
+        if not lines:
+            return {'success': True, 'last_print': None, 'message': '暂无打印记录'}
+        # lpstat 格式: HPDJ2130-19  unknown  83968  Mon Jul 27 22:08:58 2026
+        parts = lines[0].split()
+        if len(parts) >= 5:
+            date_str = ' '.join(parts[-5:])
+            try:
+                dt = datetime.strptime(date_str, '%a %b %d %H:%M:%S %Y')
+                return {
+                    'success': True,
+                    'last_print': dt.strftime('%Y-%m-%d %H:%M:%S'),
+                    'timestamp': int(dt.timestamp()),
+                    'printer': PRINTER_NAME
+                }
+            except ValueError:
+                return {'success': True, 'last_print': None, 'raw': date_str}
+        return {'success': True, 'last_print': None, 'raw': lines[0]}
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+
+@app.route('/api/last-print')
+def last_print():
+    """查询最近一次打印的时间，用于防堵头倒计时"""
+    data = get_last_print()
+    if data.get('success'):
+        return jsonify(data)
+    return jsonify(data), 500
+
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host="0.0.0.0", port=5000, debug=False)

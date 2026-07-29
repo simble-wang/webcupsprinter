@@ -7,6 +7,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#0a0a1a">
     <title>远程打印</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48dGV4dCB5PSIuOWVtIiBmb250LXNpemU9IjkwIj7wn5ao77iPPC90ZXh0Pjwvc3ZnPg==">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -777,8 +778,34 @@
         .lightbox-nav.prev { left: 8px; }
         .lightbox-nav.next { right: 8px; }
         .lightbox-nav:disabled { opacity: 0.25; cursor: default; }
+            /* ── 防堵头倒计时 ── */
+        .anti-clog-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 12px 16px;
+            margin-bottom: 16px;
+            position: relative;
+            overflow: hidden;
+            transition: border-color 0.4s, background 0.4s;
+            text-align: center;
+        }
+        .anti-clog-card.safe { border-color: rgba(52, 211, 153, 0.3); }
+        .anti-clog-card.warning { border-color: rgba(251, 191, 36, 0.4); background: rgba(251, 191, 36, 0.04); }
+        .anti-clog-card.danger { border-color: rgba(248, 113, 113, 0.5); background: rgba(248, 113, 113, 0.06); animation: clogPulse 2s infinite; }
+        @keyframes clogPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0); } 50% { box-shadow: 0 0 14px 2px rgba(248, 113, 113, 0.12); } }
+        .anti-clog-title { font-size: 0.78rem; font-weight: 500; color: var(--text-secondary); margin-bottom: 4px; }
+        .anti-clog-remaining { font-size: 0.82rem; font-weight: 600; color: var(--success); margin-bottom: 4px; }
+        .anti-clog-remaining.warning { color: var(--warning); }
+        .anti-clog-remaining.danger { color: var(--error); }
+        .anti-clog-detail { font-size: 0.7rem; color: var(--text-muted); }
+        .anti-clog-loading { text-align: center; color: var(--text-muted); font-size: 0.72rem; padding: 4px 0; }
+        .anti-clog-bar { height: 3px; border-radius: 2px; background: rgba(255,255,255,0.06); margin-top: 8px; overflow: hidden; }
+        .anti-clog-bar-fill { height: 100%; border-radius: 2px; transition: width 1s ease, background 0.4s; }
+        .anti-clog-bar-fill.safe { background: var(--success); }
+        .anti-clog-bar-fill.warning { background: var(--warning); }
+        .anti-clog-bar-fill.danger { background: var(--error); }
     </style>
-</head>
 <body>
     <div class="toast-container" id="toastContainer"></div>
 
@@ -804,6 +831,15 @@
             </div>
         </header>
 
+        
+
+        <!-- 防堵头倒计时 -->
+        <div class="anti-clog-card {{ clog_state }}" id="antiClogCard" data-last-print-ts="{{ clog_ts or '' }}" data-last-print-time="{{ clog_time or '' }}">
+            <div class="anti-clog-title">🛡️ 喷头防堵倒计时</div>
+            <div class="anti-clog-remaining {{ clog_state }}" id="clogRemaining">{{ clog_text }}</div>
+            <div class="anti-clog-detail" id="clogDetail">{{ clog_detail }}</div>
+            <div class="anti-clog-bar"><div class="anti-clog-bar-fill {{ clog_state }}" id="clogBar" style="width:{{ clog_pct }}%"></div></div>
+        </div>
         <!-- File Source Card -->
         <div class="card">
             <!-- Mode Tabs -->
@@ -904,6 +940,13 @@
     </div>
 
     <script>
+        // ── 诊断：顶层 JS 错误直接写进防堵头区域 ──
+        window.onerror = function(message, source, lineno, colno, err) {
+            const el = document.getElementById('clogRemaining');
+            if (el) el.textContent = 'JS错误@' + lineno + ': ' + message;
+            console.error('[window.onerror]', message, '@', lineno, ':', colno, err);
+            return false;
+        };
         // ── State ──
         let currentMode = 'upload';   // 'upload' | 'browse'
         let selectedFile = null;       // 上传模式：File 对象
@@ -1597,6 +1640,95 @@
                 setTimeout(() => toast.remove(), 300);
             }, 4000);
         }
+    
+        // ── 防堵头倒计时 ──
+        let clogData = { lastPrint: null, timestamp: null };
+        const CLOG_THRESHOLD = 7 * 24 * 3600; // 7天（秒）
+
+        async function fetchLastPrint() {
+            console.log('[clog] fetchLastPrint called');
+            try {
+                const resp = await fetch('/api/last-print');
+                const data = await resp.json();
+                if (data.success && data.timestamp) {
+                    clogData.lastPrint = data.last_print;
+                    clogData.timestamp = data.timestamp;
+                    document.getElementById('clogLoading').style.display = 'none';
+                    document.getElementById('clogContent').style.display = 'block';
+                    updateClogCountdown();
+                } else {
+                    document.getElementById('clogLoading').textContent = '暂无打印记录，快打一张试试吧 🖨️';
+                }
+            } catch (e) {
+                const el = document.getElementById('clogRemaining');
+                if (el) el.textContent = '查询失败: ' + (e.message || e);
+                console.error('[clog] fetch error:', e);
+            }
+        }
+
+        function updateClogCountdown() {
+            if (!clogData.timestamp) return;
+            const now = Math.floor(Date.now() / 1000);
+            const elapsed = now - clogData.timestamp;
+            const remaining = CLOG_THRESHOLD - elapsed;
+
+            const card = document.getElementById('antiClogCard');
+            const remaining_el = document.getElementById('clogRemaining');
+            const bar = document.getElementById('clogBar');
+            card.classList.remove('safe', 'warning', 'danger');
+            remaining_el.classList.remove('warning', 'danger');
+            bar.classList.remove('safe', 'warning', 'danger');
+
+            const pct = Math.min(100, (elapsed / CLOG_THRESHOLD) * 100);
+            bar.style.width = pct + '%';
+
+            document.getElementById('clogDetail').textContent = `上次打印：${clogData.lastPrint}`;
+
+            if (elapsed >= CLOG_THRESHOLD) {
+                card.classList.add('danger');
+                remaining_el.classList.add('danger');
+                remaining_el.textContent = `⚠️ 已超期，自动打印中`;
+                bar.classList.add('danger');
+            } else if (remaining <= 86400) {
+                card.classList.add('warning');
+                remaining_el.classList.add('warning');
+                remaining_el.textContent = `⏰ 还剩 ${Math.floor(remaining/3600)} 小时`;
+                bar.classList.add('warning');
+            } else {
+                card.classList.add('safe');
+                remaining_el.textContent = `✅ 剩余 ${Math.floor(remaining/86400)} 天`;
+                bar.classList.add('safe');
+            }
+        }
+
+        // 启动倒计时：先读服务端渲染的 data-* 属性做初始值，再异步拉最新
+        (function initFromServer() {
+            const card = document.getElementById('antiClogCard');
+            const ts = card && card.dataset.lastPrintTs ? Number(card.dataset.lastPrintTs) : 0;
+            const tm = card && card.dataset.lastPrintTime ? card.dataset.lastPrintTime : null;
+            if (ts && tm) {
+                clogData.timestamp = ts;
+                clogData.lastPrint = tm;
+                updateClogCountdown();
+                console.log('[clog] initialized from server:', tm);
+            } else {
+                fetchLastPrint();
+            }
+        })();
+        // 本地倒计时显示（每秒刷新，数值按天取整，无CUPS查询）
+        setInterval(updateClogCountdown, 1000);
+        // 每天查一次CUPS：检测跨天，跨天才重新拉取最近打印时间
+        // 有打印→更新timestamp重置倒计时；无→沿用旧值继续走
+        let clogLastCheckDay = new Date().toDateString();
+        setInterval(() => {
+            const today = new Date().toDateString();
+            if (today !== clogLastCheckDay) {
+                clogLastCheckDay = today;
+                fetchLastPrint();
+            }
+        }, 60000);
+
+
     </script>
 </body>
 </html>

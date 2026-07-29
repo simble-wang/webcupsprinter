@@ -36,6 +36,10 @@ PDF、PNG、JPG、JPEG、GIF、BMP、TIFF、TXT、PS、EPS、WebP
 
 > 主界面：深色主题、拖拽上传、打印设置一目了然。顶部还有喷头防堵倒计时卡片。
 
+![移动端 + 防堵头倒计时](screenshots/clog-countdown.png)
+
+> 移动端实际效果：浏览器标签上的 🖨️ favicon、顶部喷头防堵倒计时卡片（绿/黄/红三色提示进度）、上传区、打印参数设置。
+
 ## 快速开始
 
 ### 前置条件
